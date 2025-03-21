@@ -104,8 +104,8 @@ def parse_product_page(driver, article, cursor, conn):
     else:
         reviews_count = 0
 
-    # Проверка наличия кнопки "Купить"
-    available = "Доступен" if get_element(xpaths['buy_button']) else "Нет в наличии"  # 1 - доступен, 0 - недоступен
+    # Проверка наличия кнопки "Купить" на основе цены
+    available = "Доступен" if price is not None else "Нет в наличии"
 
     # Логика для "Стало дешевле"
     price_change = "Без изменений"
@@ -114,10 +114,11 @@ def parse_product_page(driver, article, cursor, conn):
         previous_record = cursor.fetchone()
         if previous_record:
             previous_original_price = previous_record[0]
-            if price < previous_original_price:
-                price_change = "Стало дешевле"
-            elif price > previous_original_price:
-                price_change = "Стало дороже"
+            if previous_original_price is not None:  # Проверка на None
+                if price < previous_original_price:
+                    price_change = "Стало дешевле"
+                elif price > previous_original_price:
+                    price_change = "Стало дороже"
 
     # Вызов функции сохранения данных
     save_to_db(cursor, conn, timestamp, product_code, price, card_price, original_price, 
