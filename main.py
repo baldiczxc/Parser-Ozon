@@ -16,10 +16,11 @@ import tempfile  # Для создания временных директори
 import undetected_chromedriver as uc  # Импортируем undetected_chromedriver
 from selenium.webdriver.support.ui import WebDriverWait  # Для явного ожидания
 from selenium.webdriver.support import expected_conditions as EC  # Условия ожидания
+from selenium.common.exceptions import WebDriverException  # Для обработки ошибок драйвера
+from time import perf_counter  # Для замера времени выполнения
 
 # Настройки Selenium
 chrome_options = Options()
-chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--disable-blink-features=AutomationControlled")  # Отключение обнаружения автоматизации
@@ -72,15 +73,24 @@ def init_db():
                 available VARCHAR(255)
             )
         ''')
-        # Удалено создание таблицы products
         conn.commit()
         return conn, cursor
     except Error as e:
         print(f"Ошибка подключения к MariaDB: {e}")
         exit(1)
 
+# Функция для проверки наличия страницы
+def is_page_available(driver, timeout=2):
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        return True
+    except Exception:
+        return False
+
 # Функция для получения данных по нескольким XPath
-def get_element(driver, xpaths, default=None, timeout=10):
+def get_element(driver, xpaths, default=None, timeout=2):
     for xpath in xpaths:
         try:
             # Явное ожидание появления элемента
@@ -94,98 +104,108 @@ def get_element(driver, xpaths, default=None, timeout=10):
 
 # Функция парсинга данных с одной страницы
 def parse_product_page(driver, article, cursor, conn):
-    url = f"https://www.ozon.ru/product/{article}/"  # Формируем ссылку на основе артикула
-    driver.get(url)
-    time.sleep(2)  # Короткая пауза для начальной загрузки страницы
-
-    # Артикул товара
-    product_code = article
-
-    # Текущие дата и время
-    date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    timestamp = int(datetime.now().timestamp())
-
-    # Пример XPath для разных вариантов отображения данных
-    xpaths = {
-        'price': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[1]',  # Основной блок
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',  # Блок с распродажей
-        ],
-        'card_price': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',  # Альтернативный блок с картой
-        ],
-        'original_price': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[2]',
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[2]',  # Альтернативный блок с оригинальной ценой
-        ],
-        'rating': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[1]/a/div'
-        ],
-        'questions_count': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[2]/a/div'
-        ],
-        'reviews_count': [
-            '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[1]/a/div'
-        ],
-    }
-
-    # Собираем данные
-    price = get_element(driver, xpaths['price'])
-    if not price:
-        print(f"Предупреждение: Цена не найдена для артикула {product_code}")
-    price = float(price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if price else None
-
-    card_price = get_element(driver, xpaths['card_price'])
-    if not card_price:
-        print(f"Предупреждение: Цена с картой не найдена для артикула {product_code}")
-    card_price = float(card_price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if card_price else None
-
-    original_price = get_element(driver, xpaths['original_price'])
-    if not original_price:
-        print(f"Предупреждение: Оригинальная цена не найдена для артикула {product_code}")
-    original_price = float(original_price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if original_price else None
-
-    rating = get_element(driver, xpaths['rating'])
-    if not rating:
-        print(f"Предупреждение: Рейтинг не найден для артикула {product_code}")
+    start_time = perf_counter()
     try:
+        url = f"https://www.ozon.ru/product/{article}/"
+        driver.get(url)
+
+        # Проверяем доступность страницы
+        if not is_page_available(driver, timeout=2):
+            print(f"Страница недоступна для артикула {article}, пропускаем.")
+            return  # Переходим к следующему артикулу
+
+        # Артикул товара
+        product_code = article
+
+        # Текущие дата и время
+        date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = int(datetime.now().timestamp())
+
+        # Пример XPath для разных вариантов отображения данных
+        xpaths = {
+            'price': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[1]',  # Основной блок
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',  # Блок с распродажей
+            ],
+            'card_price': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[1]/button/span/div/div[1]/div/div/span',  # Альтернативный блок с картой
+            ],
+            'original_price': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[2]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[2]',
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[2]/div/div/div[1]/div[3]/div/div[1]/div/div/div[1]/div[2]/div/div[1]/span[2]',  # Альтернативный блок с оригинальной ценой
+            ],
+            'rating': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[1]/a/div'
+            ],
+            'questions_count': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[2]/a/div'
+            ],
+            'reviews_count': [
+                '/html/body/div[1]/div/div[1]/div[3]/div[3]/div[1]/div[1]/div[2]/div/div/div/div[2]/div[1]/a/div'
+            ],
+        }
+
+        # Собираем данные
+        try:
+            # Ждем прогрузки цены в течение 2 секунд
+            WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.XPATH, xpaths['price'][0]))
+            )
+        except Exception:
+            print(f"Предупреждение: Цена не прогрузилась для артикула {product_code}, пропускаем.")
+            price = None
+            card_price =None
+            original_price = None
+            rating = None
+            questions_count = 0
+            reviews_count = 0
+            return  # Пропускаем текущий артикул
+
+        price = get_element(driver, xpaths['price'])
+        price = float(price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if price else None
+
+        card_price = get_element(driver, xpaths['card_price'])
+        card_price = float(card_price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if card_price else None
+
+        original_price = get_element(driver, xpaths['original_price'])
+        original_price = float(original_price.replace('₽', '').replace('\u2009', '').replace('\xa0', '').replace(' ', '')) if original_price else None
+
+        rating = get_element(driver, xpaths['rating'])
         rating = float(rating.split('•')[0].strip()) if rating else None
-    except (ValueError, AttributeError):
-        rating = None
 
-    questions_count = get_element(driver, xpaths['questions_count'])
-    if not questions_count:
-        print(f"Предупреждение: Количество вопросов не найдено для артикула {product_code}")
-    questions_count = int(questions_count.split()[0]) if questions_count else 0
+        questions_count = get_element(driver, xpaths['questions_count'])
+        questions_count = int(questions_count.split()[0]) if questions_count else 0
 
-    reviews_count = get_element(driver, xpaths['reviews_count'])
-    if not reviews_count:
-        print(f"Предупреждение: Количество отзывов не найдено для артикула {product_code}")
-    if reviews_count:
+        reviews_count = get_element(driver, xpaths['reviews_count'])
         reviews_count = reviews_count.split('•')[-1].strip()
         reviews_count = ''.join(filter(str.isdigit, reviews_count))
         reviews_count = int(reviews_count) if reviews_count else 0
-    else:
         reviews_count = 0
 
-    # Проверка наличия кнопки "Купить" на основе цены
-    available = 1 if price is not None else 0
+        # Проверка наличия кнопки "Купить" на основе цены
+        available = 1 if price is not None else 0
 
-    # Логика для "Стало дешевле"
-    price_change = 0
-    if price is not None and original_price is not None:
-        if price < original_price:
-            price_change = 1
-        elif price > original_price:
-            price_change = 1
+        # Логика для "Стало дешевле"
+        price_change = 0
+        if price is not None and original_price is not None:
+            if price < original_price:
+                price_change = 1
+            elif price > original_price:
+                price_change = 1
 
-    # Логика для "Изменения рейтинга"
-    rating_change = 0  # По умолчанию без изменений
+        # Логика для "Изменения рейтинга"
+        rating_change = 0  # По умолчанию без изменений
 
-    # Вызов функции сохранения данных
-    save_to_db(cursor, conn, date, timestamp, product_code, price, card_price, original_price, 
-            price_change, rating, rating_change, questions_count, reviews_count, available)
+        # Вызов функции сохранения данных
+        save_to_db(cursor, conn, date, timestamp, product_code, price, card_price, original_price, 
+                price_change, rating, rating_change, questions_count, reviews_count, available)
+    except Exception as e:
+        print(f"Ошибка при обработке артикула {article}: {e}, пропускаем.")
+        return  # Пропускаем текущий артикул
+    finally:
+        # Удалено отображение времени обработки
+        pass
 
 # Запись или обновление данных в БД
 def save_to_db(cursor, conn, date, timestamp, product_code, price, card_price, original_price, 
@@ -217,30 +237,38 @@ def save_to_db(cursor, conn, date, timestamp, product_code, price, card_price, o
 
 # Функция для обработки части артикулов
 def process_articles(articles):
-    conn, cursor = init_db()  # Создаём подключение к базе данных для каждого потока
-    temp_dir = tempfile.TemporaryDirectory()  # Создаём уникальную временную директорию для профиля браузера
-    try:
-        # Создаём драйвер с использованием undetected_chromedriver
-        options = uc.ChromeOptions()
-        options.add_argument(f"--user-data-dir={temp_dir.name}")  # Уникальная директория профиля
+    conn, cursor = init_db()
+    temp_dir = tempfile.TemporaryDirectory()
+
+    def create_driver():
+        options = Options()
+        options.add_argument("--headless")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--disable-gpu")  # Отключение GPU для стабильности
-        options.add_argument("--window-size=1920,1080")  # Установка размера окна
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36")
-        driver = uc.Chrome(options=options)
+        return webdriver.Chrome(service=Service('/usr/bin/chromedriver'), options=options)
 
+    driver = create_driver()
+
+    try:
         for article in articles:
-            print(f"Парсинг артикула: {article}")
+            print(f"Начата обработка артикула {article}.")
             try:
                 parse_product_page(driver, article, cursor, conn)
+            except WebDriverException as e:
+                print(f"Ошибка драйвера при обработке артикула {article}: {e}, пропускаем.")
+                continue  # Пропускаем текущий артикул
             except Exception as e:
-                print(f"Ошибка при обработке артикула {article}: {e}")
+                print(f"Ошибка при обработке артикула {article}: {e}, пропускаем.")
+                continue  # Пропускаем текущий артикул
     finally:
-        driver.quit()  # Закрываем драйвер после завершения работы
-        temp_dir.cleanup()  # Удаляем временную директорию
-        conn.close()  # Закрываем подключение к базе данных
+        driver.quit()
+        temp_dir.cleanup()
+        conn.close()
+        print("Обработка завершена, соединение с базой данных закрыто.")
 
 # Основной цикл парсинга
 def main():
