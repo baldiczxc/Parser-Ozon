@@ -1,3 +1,66 @@
+# Ozon Data Parser
+
+This project is a script for automatically parsing product data from the Ozon website. The script uses Selenium for web page interaction and SQLite for data storage.
+
+## Features
+
+- Parsing product data by their SKUs.
+- Saving data to a local SQLite database.
+- Logging errors to the `errors.log` file.
+- Automatically updating product data, including price, rating, review count, and availability.
+- Support for periodic execution with a 1-hour interval.
+
+## Installation
+
+1. Ensure you have Python version 3.7 or higher installed.
+2. Install dependencies:
+   ```bash
+   pip install selenium
+   ```
+3. Install the ChromeDriver compatible with your version of Google Chrome. Ensure the path to the driver is specified in the `service` variable in the code:
+   ```python
+   service = Service('/usr/bin/chromedriver')  # Specify the correct path
+   ```
+
+## Usage
+
+1. Create a file named `SKU_Ozon.txt` in the project's root directory. List the product SKUs in this file, one per line.
+2. Run the script:
+   ```bash
+   python main.py
+   ```
+3. The script will automatically run every x minutes. To stop it, press `Ctrl+C`.
+
+## Database Structure
+
+The script creates a database `ozon_data.db` with a table `products`. Table fields:
+
+- `id` — unique record identifier.
+- `timestamp` — date and time of the last record update.
+- `product_code` — product SKU.
+- `price` — current product price.
+- `card_price` — product price with an Ozon card.
+- `original_price` — original product price.
+- `price_change` — price change ("Price dropped", "Price increased", "No change").
+- `rating` — product rating.
+- `questions_count` — number of questions about the product.
+- `reviews_count` — number of product reviews.
+- `available` — product availability ("Available" or "Out of stock").
+
+## Logging
+
+Errors are logged to the `errors.log` file in the format:
+```
+<date and time> - ERROR - <error description>
+```
+
+## Notes
+
+- The script runs in headless mode (without browser display).
+- Ensure the Ozon website is accessible and does not block automated requests.
+
+---
+
 # Парсер данных с Ozon
 
 Этот проект представляет собой скрипт для автоматического парсинга данных о товарах с сайта Ozon. Скрипт использует Selenium для взаимодействия с веб-страницами и SQLite для хранения данных.
